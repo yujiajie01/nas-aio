@@ -1,0 +1,189 @@
+# =============================================================================
+# Prometheus 告警规则配置
+# =============================================================================
+
+groups:
+  # 系统资源告警
+  - name: system_alerts
+    rules:
+      # CPU 使用率告警
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "高CPU使用率告警"
+          description: "实例 {{ $labels.instance }} CPU使用率超过80%，当前值: {{ $value }}%"
+
+      # 内存使用率告警
+      - alert: HighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "高内存使用率告警"
+          description: "实例 {{ $labels.instance }} 内存使用率超过85%，当前值: {{ $value }}%"
+
+      # 磁盘空间告警
+      - alert: HighDiskUsage
+        expr: (1 - (node_filesystem_avail_bytes{fstype!="tmpfs"} / node_filesystem_size_bytes{fstype!="tmpfs"})) * 100 > 90
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "磁盘空间不足告警"
+          description: "实例 {{ $labels.instance }} 磁盘 {{ $labels.mountpoint }} 使用率超过90%，当前值: {{ $value }}%"
+
+      # 磁盘IO告警
+      - alert: HighDiskIO
+        expr: rate(node_disk_io_time_seconds_total[5m]) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "高磁盘IO告警"
+          description: "实例 {{ $labels.instance }} 磁盘 {{ $labels.device }} IO使用率过高"
+
+  # 容器服务告警
+  - name: container_alerts
+    rules:
+      # 容器停止告警
+      - alert: ContainerDown
+        expr: absent(container_last_seen{name=~"moviepilot|emby|qbittorrent|transmission|homepage"})
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "重要容器停止告警"
+          description: "重要容器 {{ $labels.name }} 已停止运行"
+
+      # 容器重启告警
+      - alert: ContainerRestarting
+        expr: rate(container_start_time_seconds[10m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "容器频繁重启告警"
+          description: "容器 {{ $labels.name }} 在过去10分钟内重启了 {{ $value }} 次"
+
+      # 容器内存使用率告警
+      - alert: ContainerHighMemoryUsage
+        expr: (container_memory_usage_bytes / container_spec_memory_limit_bytes) * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "容器内存使用率过高"
+          description: "容器 {{ $labels.name }} 内存使用率超过90%，当前值: {{ $value }}%"
+
+      # 容器CPU使用率告警
+      - alert: ContainerHighCPUUsage
+        expr: (rate(container_cpu_usage_seconds_total[5m]) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "容器CPU使用率过高"
+          description: "容器 {{ $labels.name }} CPU使用率超过80%，当前值: {{ $value }}%"
+
+  # 应用服务告警
+  - name: application_alerts
+    rules:
+      # MoviePilot 服务告警
+      - alert: MoviePilotDown
+        expr: up{job="moviepilot"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MoviePilot 服务停止"
+          description: "MoviePilot 调度中心服务无法访问"
+
+      # Emby 服务告警
+      - alert: EmbyDown
+        expr: up{job="emby"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Emby 服务停止"
+          description: "Emby 媒体服务器无法访问"
+
+      # qBittorrent 服务告警
+      - alert: QBittorrentDown
+        expr: up{job="qbittorrent"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "qBittorrent 服务停止"
+          description: "qBittorrent 下载器无法访问"
+
+      # 下载速度异常告警
+      - alert: SlowDownloadSpeed
+        expr: qbittorrent_global_download_speed < 1048576  # 1MB/s
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "下载速度过慢"
+          description: "当前下载速度低于1MB/s，可能存在网络问题"
+
+  # 网络连接告警
+  - name: network_alerts
+    rules:
+      # 网络连接失败告警
+      - alert: NetworkConnectivityIssue
+        expr: probe_success{job="blackbox"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "网络连接异常"
+          description: "目标 {{ $labels.instance }} 网络连接失败"
+
+      # 高网络延迟告警
+      - alert: HighNetworkLatency
+        expr: probe_duration_seconds{job="blackbox"} > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "网络延迟过高"
+          description: "目标 {{ $labels.instance }} 网络延迟超过5秒"
+
+  # 存储相关告警
+  - name: storage_alerts
+    rules:
+      # 下载目录空间不足
+      - alert: DownloadDirFull
+        expr: (1 - (node_filesystem_avail_bytes{mountpoint="/opt/nas-data/downloads"} / node_filesystem_size_bytes{mountpoint="/opt/nas-data/downloads"})) * 100 > 95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "下载目录空间不足"
+          description: "下载目录空间使用率超过95%，当前值: {{ $value }}%"
+
+      # 媒体库空间不足
+      - alert: MediaDirFull
+        expr: (1 - (node_filesystem_avail_bytes{mountpoint="/opt/nas-data/media"} / node_filesystem_size_bytes{mountpoint="/opt/nas-data/media"})) * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "媒体库空间不足"
+          description: "媒体库空间使用率超过90%，当前值: {{ $value }}%"
+
+      # 磁盘IO错误告警
+      - alert: DiskIOErrors
+        expr: rate(node_disk_io_now[5m]) > 10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "磁盘IO错误"
+          description: "实例 {{ $labels.instance }} 磁盘 {{ $labels.device }} 出现IO错误"

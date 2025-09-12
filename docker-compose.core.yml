@@ -1,0 +1,242 @@
+version: '3.8'
+
+# =============================================================================
+# NAS 自动化系统 - 核心服务 Docker Compose 配置
+# =============================================================================
+
+networks:
+  nas-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+services:
+  # =============================================================================
+  # MoviePilot - 总调度中心
+  # =============================================================================
+  moviepilot:
+    image: jxxghp/moviepilot:latest
+    container_name: moviepilot
+    restart: unless-stopped
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-Asia/Shanghai}
+      - UMASK=022
+      - MOVIEPILOT_AUTO_UPDATE=true
+      - SUPERUSER=${MOVIEPILOT_SUPERUSER:-admin}
+      - SUPERUSER_PASSWORD=${MOVIEPILOT_SUPERUSER_PASSWORD:-password123}
+      - API_TOKEN=${MOVIEPILOT_API_TOKEN:-your_api_token_here}
+      - BIG_MEMORY_MODE=true
+      - DEV=false
+    volumes:
+      - ${CONFIG_PATH}/moviepilot:/config
+      - ${MEDIA_PATH}:/media
+      - ${DOWNLOAD_PATH}:/downloads
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "8001:3001"
+    networks:
+      nas-network:
+        ipv4_address: 172.20.0.10
+    depends_on:
+      - qbittorrent
+      - emby
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/v1/system/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # =============================================================================
+  # Emby - 媒体服务器
+  # =============================================================================
+  emby:
+    image: emby/embyserver:latest
+    container_name: emby
+    restart: unless-stopped
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-Asia/Shanghai}
+      - UMASK=022
+    volumes:
+      - ${CONFIG_PATH}/emby:/config
+      - ${MEDIA_PATH}:/media
+      - ${DOWNLOAD_PATH}/complete:/downloads:ro
+    ports:
+      - "8096:8096"
+      - "8920:8920"  # HTTPS
+    networks:
+      nas-network:
+        ipv4_address: 172.20.0.11
+    devices:
+      - /dev/dri:/dev/dri  # 硬件加速支持
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8096/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # =============================================================================
+  # qBittorrent - 主力下载器
+  # =============================================================================
+  qbittorrent:
+    image: linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    restart: unless-stopped
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-Asia/Shanghai}
+      - UMASK=022
+      - WEBUI_PORT=8080
+    volumes:
+      - ${CONFIG_PATH}/qbittorrent:/config
+      - ${DOWNLOAD_PATH}:/downloads
+    ports:
+      - "8080:8080"
+      - "6881:6881"
+      - "6881:6881/udp"
+    networks:
+      nas-network:
+        ipv4_address: 172.20.0.12
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # =============================================================================
+  # Transmission - 保种下载器
+  # =============================================================================
+  transmission:
+    image: linuxserver/transmission:latest
+    container_name: transmission
+    restart: unless-stopped
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-Asia/Shanghai}
+      - UMASK=022
+      - TRANSMISSION_WEB_HOME=/flood-for-transmission/
+      - USER=${TRANSMISSION_USER:-admin}
+      - PASS=${TRANSMISSION_PASS:-password123}
+    volumes:
+      - ${CONFIG_PATH}/transmission:/config
+      - ${DOWNLOAD_PATH}:/downloads
+      - ${DOWNLOAD_PATH}/watch:/watch
+    ports:
+      - "9091:9091"
+      - "51413:51413"
+      - "51413:51413/udp"
+    networks:
+      nas-network:
+        ipv4_address: 172.20.0.13
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # =============================================================================
+  # CookieCloud - Cookie 同步服务
+  # =============================================================================
+  cookiecloud:
+    image: easychen/cookiecloud:latest
+    container_name: cookiecloud
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ:-Asia/Shanghai}
+    volumes:
+      - ${CONFIG_PATH}/cookiecloud:/data/api/data
+    ports:
+      - "8088:8088"
+    networks:
+      nas-network:
+        ipv4_address: 172.20.0.14
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8088"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # =============================================================================
+  # ChineseSubFinder - 中文字幕下载
+  # =============================================================================
+  chinesesubfinder:
+    image: allanpk716/chinesesubfinder:latest
+    container_name: chinesesubfinder
+    restart: unless-stopped
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-Asia/Shanghai}
+      - UMASK=022
+    volumes:
+      - ${CONFIG_PATH}/chinesesubfinder:/config
+      - ${MEDIA_PATH}:/media
+      - ${DOWNLOAD_PATH}/complete:/downloads:ro
+      - ${CONFIG_PATH}/chinesesubfinder/logs:/logs
+    ports:
+      - "19035:19035"
+    networks:
+      nas-network:
+        ipv4_address: 172.20.0.15
+    depends_on:
+      - emby
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:19035"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 120s
+
+  # =============================================================================
+  # IYUU - 自动辅种工具
+  # =============================================================================
+  iyuu:
+    image: iyuucn/iyuuplus:latest
+    container_name: iyuu
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ:-Asia/Shanghai}
+    volumes:
+      - ${CONFIG_PATH}/iyuu:/iyuu
+      - ${DOWNLOAD_PATH}:/downloads
+    ports:
+      - "9780:8787"
+    networks:
+      nas-network:
+        ipv4_address: 172.20.0.16
+    depends_on:
+      - qbittorrent
+      - transmission
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8787"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  moviepilot-data:
+    driver: local
+  emby-data:
+    driver: local
+  qbittorrent-data:
+    driver: local
+  transmission-data:
+    driver: local
+  cookiecloud-data:
+    driver: local
+  chinesesubfinder-data:
+    driver: local
+  iyuu-data:
+    driver: local

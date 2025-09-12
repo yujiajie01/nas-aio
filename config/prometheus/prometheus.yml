@@ -1,0 +1,93 @@
+# =============================================================================
+# Prometheus 配置文件
+# =============================================================================
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# 告警规则文件
+rule_files:
+  - "alert_rules.yml"
+
+# 告警管理器配置
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+# 抓取配置
+scrape_configs:
+  # Prometheus 自身监控
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Node Exporter - 系统指标
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+  # cAdvisor - 容器指标
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+
+  # Docker Engine 指标
+  - job_name: 'docker'
+    static_configs:
+      - targets: ['172.20.0.1:9323']
+
+  # NAS 核心服务监控
+  - job_name: 'moviepilot'
+    static_configs:
+      - targets: ['moviepilot:3001']
+    metrics_path: '/api/v1/system/status'
+    scrape_interval: 30s
+
+  - job_name: 'emby'
+    static_configs:
+      - targets: ['emby:8096']
+    metrics_path: '/health'
+    scrape_interval: 30s
+
+  - job_name: 'qbittorrent'
+    static_configs:
+      - targets: ['qbittorrent:8080']
+    scrape_interval: 30s
+
+  - job_name: 'transmission'
+    static_configs:
+      - targets: ['transmission:9091']
+    scrape_interval: 30s
+
+  # 扩展服务监控
+  - job_name: 'homepage'
+    static_configs:
+      - targets: ['homepage:3000']
+    scrape_interval: 60s
+
+  - job_name: 'komga'
+    static_configs:
+      - targets: ['komga:25600']
+    metrics_path: '/api/v1/actuator/prometheus'
+    scrape_interval: 60s
+
+  - job_name: 'navidrome'
+    static_configs:
+      - targets: ['navidrome:4533']
+    metrics_path: '/metrics'
+    scrape_interval: 60s
+
+  # 监控服务自身
+  - job_name: 'uptime-kuma'
+    static_configs:
+      - targets: ['uptime-kuma:3001']
+    scrape_interval: 60s
+
+  - job_name: 'grafana'
+    static_configs:
+      - targets: ['grafana:3000']
+    metrics_path: '/metrics'
+    scrape_interval: 60s
