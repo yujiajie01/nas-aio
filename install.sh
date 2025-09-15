@@ -22,6 +22,15 @@ readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly BASE_DIR="/opt/nas-data"
 readonly LOG_FILE="/tmp/nas-install.log"
 readonly BACKUP_DIR="${BASE_DIR}/backup/$(date +%Y%m%d_%H%M%S)"
+readonly PROGRESS_FILE="/tmp/nas-install-progress"
+readonly ROLLBACK_LOG="/tmp/nas-rollback.log"
+
+# 安装步骤计数
+TOTAL_STEPS=12
+CURRENT_STEP=0
+
+# 已安装组件追踪（用于回滚）
+INSTALLED_COMPONENTS=()
 
 # 日志函数
 log() {
@@ -48,14 +57,279 @@ log() {
             ;;
     esac
     
-    echo "[$timestamp] [$level] $message" >> "$LOG_FILE"
-}
-
 # 错误处理
 error_exit() {
     log "ERROR" "$1"
     log "ERROR" "安装失败，请检查日志文件: $LOG_FILE"
+    
+    # 执行回滚
+    if [ "${#INSTALLED_COMPONENTS[@]}" -gt 0 ]; then
+        log "INFO" "检测到部分组件已安装，开始自动回滚..."
+        rollback_installation
+    fi
+    
     exit 1
+}
+
+# 进度条显示
+show_progress() {
+    local current="$1"
+    local total="$2"
+    local step_name="$3"
+    local percent=$((current * 100 / total))
+    local filled=$((percent / 2))
+    local empty=$((50 - filled))
+    
+    printf "\r${BLUE}["
+    printf "%${filled}s" | tr ' ' '='
+    printf "%${empty}s" | tr ' ' '-'
+    printf "] %d%% - %s${NC}" "$percent" "$step_name"
+    
+    # 保存进度到文件
+    echo "$percent|$step_name" > "$PROGRESS_FILE"
+    
+    if [ "$current" -eq "$total" ]; then
+        echo "" # 换行
+    fi
+}
+
+# 更新进度
+update_progress() {
+    local step_name="$1"
+    CURRENT_STEP=$((CURRENT_STEP + 1))
+    show_progress "$CURRENT_STEP" "$TOTAL_STEPS" "$step_name"
+}
+
+# 记录已安装组件
+record_installed_component() {
+    local component="$1"
+    INSTALLED_COMPONENTS+=("$component")
+    echo "$component" >> "$ROLLBACK_LOG"
+}
+
+# 回滚机制
+rollback_installation() {
+    log "WARNING" "开始回滚安装..."
+    
+    if [ -f "$ROLLBACK_LOG" ]; then
+        # 反向读取已安装组件，按安装相反的顺序回滚
+        tac "$ROLLBACK_LOG" | while read -r component; do
+            case "$component" in
+                "docker_services")
+                    log "INFO" "停止 Docker 服务..."
+                    docker-compose -f docker-compose.core.yml down 2>/dev/null || true
+                    docker-compose -f docker-compose.extend.yml down 2>/dev/null || true
+                    ;;
+                "docker_images")
+                    log "INFO" "清理 Docker 镜像..."
+                    docker image prune -af 2>/dev/null || true
+                    ;;
+                "docker_compose")
+                    log "INFO" "卸载 Docker Compose..."
+                    sudo rm -f /usr/local/bin/docker-compose /usr/bin/docker-compose 2>/dev/null || true
+                    ;;
+                "docker")
+                    log "INFO" "卸载 Docker..."
+                    sudo systemctl stop docker 2>/dev/null || true
+                    sudo systemctl disable docker 2>/dev/null || true
+                    ;;
+                "directories")
+                    log "INFO" "清理目录结构..."
+                    if [ -d "$BASE_DIR" ]; then
+                        sudo rm -rf "$BASE_DIR" 2>/dev/null || true
+                    fi
+                    ;;
+                "system_packages")
+                    log "INFO" "清理系统包..."
+                    # 注意：不建议自动卸载系统包，可能影响其他程序
+                    ;;
+            esac
+        done
+    fi
+    
+    # 清理临时文件
+    rm -f "$PROGRESS_FILE" "$ROLLBACK_LOG" 2>/dev/null || true
+    
+    log "SUCCESS" "回滚完成"
+}
+
+# 配置文件验证
+validate_config() {
+    local config_file="$1"
+    log "INFO" "验证配置文件: $config_file"
+    
+    if [ ! -f "$config_file" ]; then
+        log "ERROR" "配置文件不存在: $config_file"
+        return 1
+    fi
+    
+    # 检查必要的环境变量
+    local required_vars=(
+        "MOVIEPILOT_API_TOKEN"
+        "QB_USERNAME"
+        "QB_PASSWORD"
+        "TRANSMISSION_USER"
+        "TRANSMISSION_PASS"
+    )
+    
+    local validation_failed=false
+    
+    for var in "${required_vars[@]}"; do
+        if ! grep -q "^${var}=" "$config_file" || grep -q "^${var}=$" "$config_file" || grep -q "^${var}=your_.*_here" "$config_file"; then
+            log "ERROR" "配置项 $var 未设置或使用默认值"
+            validation_failed=true
+        fi
+    done
+    
+    # 检查端口冲突
+    local ports=(3000 8001 8096 8080 9091 8088 19035 9780 25600 25378 25533 8083)
+    for port in "${ports[@]}"; do
+        if netstat -tuln 2>/dev/null | grep -q ":$port "; then
+            log "WARNING" "端口 $port 已被占用，可能导致服务冲突"
+        fi
+    done
+    
+    # 检查目录权限
+    if [ -d "$BASE_DIR" ] && [ ! -w "$BASE_DIR" ]; then
+        log "ERROR" "数据目录 $BASE_DIR 不可写"
+        validation_failed=true
+    fi
+    
+    if [ "$validation_failed" = true ]; then
+        log "ERROR" "配置文件验证失败"
+        return 1
+    fi
+    
+    log "SUCCESS" "配置文件验证通过"
+    return 0
+}
+
+# 并行拉取 Docker 镜像
+pull_docker_images_parallel() {
+    log "INFO" "并行拉取 Docker 镜像（这可能需要较长时间）..."
+    
+    cd "$SCRIPT_DIR"
+    export ENV_FILE="${BASE_DIR}/config/.env"
+    
+    # 获取所有需要的镜像列表
+    local core_images=()
+    local extend_images=()
+    
+    # 从 docker-compose 文件中提取镜像名称
+    if [ -f "docker-compose.core.yml" ]; then
+        mapfile -t core_images < <(docker-compose -f docker-compose.core.yml --env-file "$ENV_FILE" config --services 2>/dev/null | while read service; do
+            docker-compose -f docker-compose.core.yml --env-file "$ENV_FILE" config | grep -A 10 "$service:" | grep "image:" | awk '{print $2}' | head -1
+        done | grep -v '^$')
+    fi
+    
+    if [ -f "docker-compose.extend.yml" ]; then
+        mapfile -t extend_images < <(docker-compose -f docker-compose.extend.yml --env-file "$ENV_FILE" config --services 2>/dev/null | while read service; do
+            docker-compose -f docker-compose.extend.yml --env-file "$ENV_FILE" config | grep -A 10 "$service:" | awk '/image:/ {print $2}' | head -1
+        done | grep -v '^$')
+    fi
+    
+    local all_images=("${core_images[@]}" "${extend_images[@]}")
+    local total_images=${#all_images[@]}
+    
+    if [ $total_images -eq 0 ]; then
+        log "WARNING" "未找到需要拉取的镜像，使用传统方式"
+        # 退回到传统方式
+        docker-compose -f docker-compose.core.yml --env-file "$ENV_FILE" pull
+        docker-compose -f docker-compose.extend.yml --env-file "$ENV_FILE" pull
+        return
+    fi
+    
+    log "INFO" "找到 $total_images 个镜像需要拉取"
+    
+    # 创建临时目录存储并行任务的 PID
+    local pids_dir="/tmp/nas-pull-pids"
+    mkdir -p "$pids_dir"
+    
+    # 并行拉取镜像（最多 4 个并发）
+    local max_parallel=4
+    local current_parallel=0
+    local completed=0
+    
+    for image in "${all_images[@]}"; do
+        if [ -z "$image" ] || [ "$image" = "null" ]; then
+            continue
+        fi
+        
+        # 等待并发数量减少
+        while [ $current_parallel -ge $max_parallel ]; do
+            sleep 1
+            # 检查完成的任务
+            for pid_file in "$pids_dir"/*.pid; do
+                if [ -f "$pid_file" ]; then
+                    local pid=$(cat "$pid_file" 2>/dev/null)
+                    if ! kill -0 "$pid" 2>/dev/null; then
+                        rm -f "$pid_file"
+                        current_parallel=$((current_parallel - 1))
+                        completed=$((completed + 1))
+                        
+                        # 更新进度
+                        local percent=$((completed * 100 / total_images))
+                        printf "\r${BLUE}[拉取镜像] %d%% (%d/%d)${NC}" "$percent" "$completed" "$total_images"
+                    fi
+                fi
+            done
+        done
+        
+        # 启动新的拉取任务
+        {
+            docker pull "$image" &>/dev/null
+            echo $? > "$pids_dir/pull_$$.result"
+        } &
+        
+        local pid=$!
+        echo "$pid" > "$pids_dir/pull_$$.pid"
+        current_parallel=$((current_parallel + 1))
+    done
+    
+    # 等待所有任务完成
+    while [ $current_parallel -gt 0 ]; do
+        sleep 1
+        for pid_file in "$pids_dir"/*.pid; do
+            if [ -f "$pid_file" ]; then
+                local pid=$(cat "$pid_file" 2>/dev/null)
+                if ! kill -0 "$pid" 2>/dev/null; then
+                    rm -f "$pid_file"
+                    current_parallel=$((current_parallel - 1))
+                    completed=$((completed + 1))
+                    
+                    local percent=$((completed * 100 / total_images))
+                    printf "\r${BLUE}[拉取镜像] %d%% (%d/%d)${NC}" "$percent" "$completed" "$total_images"
+                fi
+            fi
+        done
+    done
+    
+    echo "" # 换行
+    
+    # 检查是否有失败的任务
+    local failed_count=0
+    for result_file in "$pids_dir"/*.result; do
+        if [ -f "$result_file" ]; then
+            local result=$(cat "$result_file" 2>/dev/null)
+            if [ "$result" != "0" ]; then
+                failed_count=$((failed_count + 1))
+            fi
+        fi
+    done
+    
+    # 清理临时文件
+    rm -rf "$pids_dir"
+    
+    if [ $failed_count -eq 0 ]; then
+        log "SUCCESS" "Docker 镜像并行拉取完成"
+        record_installed_component "docker_images"
+    else
+        log "WARNING" "$failed_count 个镜像拉取失败，将使用传统方式重试"
+        # 退回到传统方式
+        docker-compose -f docker-compose.core.yml --env-file "$ENV_FILE" pull
+        docker-compose -f docker-compose.extend.yml --env-file "$ENV_FILE" pull
+        record_installed_component "docker_images"
+    fi
 }
 
 # 显示横幅
@@ -85,7 +359,7 @@ EOF
 
 # 检测系统信息
 detect_system() {
-    log "INFO" "检测系统信息..."
+    update_progress "检测系统信息"
     
     if [ -f /etc/os-release ]; then
         . /etc/os-release
@@ -108,7 +382,7 @@ detect_system() {
 
 # 检查前置条件
 check_prerequisites() {
-    log "INFO" "检查前置条件..."
+    update_progress "检查前置条件"
     
     # 检查是否为root用户
     if [[ $EUID -eq 0 ]]; then
@@ -141,28 +415,29 @@ check_prerequisites() {
 
 # 更新系统
 update_system() {
-    log "INFO" "更新系统包..."
+    update_progress "更新系统包"
     
     case "$OS" in
         *"Ubuntu"*|*"Debian"*)
             sudo apt update && sudo apt upgrade -y
-            sudo apt install -y curl wget git unzip htop iotop nethogs tree vim nano
+            sudo apt install -y curl wget git unzip htop iotop nethogs tree vim nano bc
             ;;
         *"CentOS"*|*"Red Hat"*)
             sudo yum update -y
-            sudo yum install -y curl wget git unzip htop iotop nethogs tree vim nano
+            sudo yum install -y curl wget git unzip htop iotop nethogs tree vim nano bc
             ;;
         *)
             log "WARNING" "未知系统类型，跳过系统更新"
             ;;
     esac
     
+    record_installed_component "system_packages"
     log "SUCCESS" "系统更新完成"
 }
 
 # 安装 Docker
 install_docker() {
-    log "INFO" "安装 Docker..."
+    update_progress "安装 Docker"
     
     if command -v docker &> /dev/null; then
         log "INFO" "Docker 已安装，跳过安装步骤"
@@ -199,6 +474,7 @@ EOF
     sudo mv /tmp/daemon.json /etc/docker/daemon.json
     sudo systemctl restart docker
     
+    record_installed_component "docker"
     log "SUCCESS" "Docker 安装完成"
 }
 
@@ -221,12 +497,13 @@ install_docker_compose() {
     # 创建软链接
     sudo ln -sf /usr/local/bin/docker-compose /usr/bin/docker-compose
     
+    record_installed_component "docker_compose"
     log "SUCCESS" "Docker Compose 安装完成"
 }
 
 # 创建目录结构
 setup_directories() {
-    log "INFO" "创建目录结构..."
+    update_progress "创建目录结构"
     
     if [ -x "${SCRIPT_DIR}/setup-directories.sh" ]; then
         bash "${SCRIPT_DIR}/setup-directories.sh"
@@ -234,12 +511,13 @@ setup_directories() {
         error_exit "找不到目录设置脚本: ${SCRIPT_DIR}/setup-directories.sh"
     fi
     
+    record_installed_component "directories"
     log "SUCCESS" "目录结构创建完成"
 }
 
 # 生成配置文件
 generate_configs() {
-    log "INFO" "生成配置文件..."
+    update_progress "生成配置文件"
     
     # 复制示例配置文件
     if [ -f "${BASE_DIR}/config/.env.example" ]; then
@@ -257,9 +535,14 @@ generate_configs() {
         sed -i "s/adminpass/$qb_password/g" "${BASE_DIR}/config/.env"
         sed -i "s/password123/$transmission_password/g" "${BASE_DIR}/config/.env"
         
-        log "SUCCESS" "配置文件生成完成"
-        log "INFO" "配置文件位置: ${BASE_DIR}/config/.env"
-        log "INFO" "请根据需要修改配置参数"
+        # 验证配置文件
+        if validate_config "${BASE_DIR}/config/.env"; then
+            log "SUCCESS" "配置文件生成完成"
+            log "INFO" "配置文件位置: ${BASE_DIR}/config/.env"
+            log "INFO" "请根据需要修改配置参数"
+        else
+            error_exit "配置文件验证失败"
+        fi
     else
         error_exit "找不到配置文件模板"
     fi
@@ -267,25 +550,15 @@ generate_configs() {
 
 # 拉取 Docker 镜像
 pull_docker_images() {
-    log "INFO" "拉取 Docker 镜像（这可能需要较长时间）..."
+    update_progress "拉取 Docker 镜像"
     
-    cd "$SCRIPT_DIR"
-    
-    # 设置环境变量文件路径
-    export ENV_FILE="${BASE_DIR}/config/.env"
-    
-    # 拉取核心服务镜像
-    docker-compose -f docker-compose.core.yml --env-file "$ENV_FILE" pull
-    
-    # 拉取扩展服务镜像
-    docker-compose -f docker-compose.extend.yml --env-file "$ENV_FILE" pull
-    
-    log "SUCCESS" "Docker 镜像拉取完成"
+    # 使用并行拉取函数
+    pull_docker_images_parallel
 }
 
 # 启动核心服务
 start_core_services() {
-    log "INFO" "启动核心服务..."
+    update_progress "启动核心服务"
     
     cd "$SCRIPT_DIR"
     export ENV_FILE="${BASE_DIR}/config/.env"
@@ -300,12 +573,13 @@ start_core_services() {
     # 检查服务状态
     check_service_status "core"
     
+    record_installed_component "docker_services"
     log "SUCCESS" "核心服务启动完成"
 }
 
 # 启动扩展服务
 start_extend_services() {
-    log "INFO" "启动扩展服务..."
+    update_progress "启动扩展服务"
     
     cd "$SCRIPT_DIR"
     export ENV_FILE="${BASE_DIR}/config/.env"
@@ -384,7 +658,7 @@ show_install_result() {
 
 # 创建快捷管理脚本
 create_management_scripts() {
-    log "INFO" "创建管理脚本..."
+    update_progress "创建管理脚本"
     
     # 创建服务管理脚本
     cat > "${BASE_DIR}/scripts/manage-services.sh" << 'EOF'
@@ -465,6 +739,9 @@ main() {
     local start_time=$(date +%s)
     log "INFO" "开始安装 NAS 自动化系统..."
     
+    # 初始化进度条
+    echo "0|初始化" > "$PROGRESS_FILE"
+    
     # 执行安装步骤
     detect_system
     check_prerequisites
@@ -478,6 +755,9 @@ main() {
     start_extend_services
     create_management_scripts
     
+    # 完成进度
+    update_progress "安装完成"
+    
     # 计算安装时间
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
@@ -489,6 +769,9 @@ main() {
     
     log "SUCCESS" "安装完成！总耗时: ${minutes}分${seconds}秒"
     log "INFO" "重启后服务将自动启动"
+    
+    # 清理临时文件
+    rm -f "$PROGRESS_FILE" "$ROLLBACK_LOG" 2>/dev/null || true
     
     # 询问是否重启
     echo -e "\n${YELLOW}建议重启系统以确保所有服务正常运行${NC}"
