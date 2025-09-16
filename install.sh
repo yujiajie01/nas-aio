@@ -737,7 +737,7 @@ EOF
     rm -f "$PROGRESS_FILE" "$ROLLBACK_LOG" 2>/dev/null || true
     
     # 询问是否重启
-    echo -e "\n${YELLOW}建议重启系统以确保所有服务正常运�?{NC}"
+    echo -e "\n${YELLOW}建议重启系统以确保所有服务正常运?{NC}"
     read -p "是否现在重启? (y/N): " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
@@ -745,8 +745,10 @@ EOF
         sleep 10
         sudo reboot
     fi
-# �źŴ���
-trap 'error_exit "��װ���ж�"' INT TERM
+}
 
-# ִ��������
+# 信号处理
+trap 'error_exit "安装被中断"' INT TERM
+
+# 执行主函数
 main "$@"
