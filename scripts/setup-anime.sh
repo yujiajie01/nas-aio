@@ -113,24 +113,8 @@ setup_directories() {
 setup_env() {
     log "INFO" "配置环境变量..."
     
-    # 创建 .env 文件
-    cat > "${SCRIPT_DIR}/.env" << EOF
-# 自动追番系统环境变量配置
-
-# 基础配置
-PUID=$(id -u)
-PGID=$(id -g)
-TZ=Asia/Shanghai
-
-# 路径配置
-BASE_DIR=${BASE_DIR}
-CONFIG_PATH=${CONFIG_PATH}
-DOWNLOAD_PATH=${DOWNLOAD_PATH}
-ANIME_DIR=${ANIME_DIR}
-
-# FlexGet 配置
-FLEXGET_WEBUI_PASS=password123
-EOF
+    # 创建 .env 文件（现在 docker-compose 文件中已包含所有配置）
+    log "INFO" "docker-compose 文件已包含所有必要配置，无需额外环境变量文件"
     
     log "SUCCESS" "环境变量配置完成"
 }
@@ -156,14 +140,14 @@ start_services() {
     cd "${SCRIPT_DIR}"
     
     # 启动服务
-    docker-compose -f docker-compose.anime-minimal.yml --env-file .env up -d
+    docker-compose -f docker-compose.anime-minimal.yml up -d
     
     # 等待服务启动
     log "INFO" "等待服务启动..."
     sleep 30
     
     # 检查服务状态
-    docker-compose -f docker-compose.anime-minimal.yml --env-file .env ps
+    docker-compose -f docker-compose.anime-minimal.yml ps
     
     log "SUCCESS" "自动追番服务启动完成"
 }

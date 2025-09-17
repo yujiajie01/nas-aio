@@ -49,9 +49,8 @@ graph TD
 git clone https://github.com/your-repo/nas-aio.git
 cd nas-aio
 
-# 运行初始化脚本
-chmod +x scripts/setup-anime.sh
-./scripts/setup-anime.sh
+# 启动服务
+docker-compose -f docker-compose.anime-minimal.yml up -d
 ```
 
 ### 3. 配置订阅
@@ -175,7 +174,7 @@ tasks:
 
 ```yaml
 volumes:
-  - ${DOWNLOAD_PATH}/anime:/downloads  # 修改右侧路径
+  - /opt/nas-data/downloads/anime:/downloads  # 修改右侧路径
 ```
 
 ### 3. 如何修改检查频率？

@@ -21,14 +21,14 @@ services:
     container_name: anime-qbittorrent
     restart: unless-stopped
     environment:
-      - PUID=${PUID:-1000}
-      - PGID=${PGID:-1000}
-      - TZ=${TZ:-Asia/Shanghai}
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Shanghai
       - UMASK=022
       - WEBUI_PORT=8080
     volumes:
-      - ${CONFIG_PATH}/anime-qbittorrent:/config
-      - ${DOWNLOAD_PATH}/anime:/downloads
+      - /opt/nas-data/config/anime-qbittorrent:/config
+      - /opt/nas-data/downloads/anime:/downloads
     ports:
       - "8080:8080"
       - "6881:6881"
@@ -51,13 +51,13 @@ services:
     container_name: anime-flexget
     restart: unless-stopped
     environment:
-      - PUID=${PUID:-1000}
-      - PGID=${PGID:-1000}
-      - TZ=${TZ:-Asia/Shanghai}
-      - FG_WEBUI_PASS=${FLEXGET_WEBUI_PASS:-password123}
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Shanghai
+      - FG_WEBUI_PASS=password123
     volumes:
-      - ${CONFIG_PATH}/anime-flexget:/config
-      - ${DOWNLOAD_PATH}/anime:/downloads
+      - /opt/nas-data/config/anime-flexget:/config
+      - /opt/nas-data/downloads/anime:/downloads
     ports:
       - "5050:5050"
     networks:
