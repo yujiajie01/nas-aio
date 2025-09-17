@@ -776,3 +776,4 @@ trap 'error_exit "安装被中断"' INT TERM
 
 # 执行主函数
 main "$@"
+

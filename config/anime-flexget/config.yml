@@ -1,0 +1,128 @@
+# =============================================================================
+# FlexGet 配置文件 - 自动追番配置
+# =============================================================================
+
+# 全局设置
+templates:
+  # 全局动漫下载模板
+  global-anime:
+    # 下载到 qbittorrent
+    qbittorrent:
+      host: 172.21.0.10
+      port: 8080
+      username: admin
+      password: adminadmin
+      
+    # 文件操作
+    manipulate:
+      - title:
+          replace:
+            regexp: '^\[.*?\]'
+            format: ''
+            
+    # 内置重试机制
+    retry_failed:
+      retry_time: 5 minutes
+      max_retries: 3
+      
+    # 通知设置（可选）
+    notify:
+      entries:
+        via:
+          - email:
+              active: False
+              
+  # 动漫 RSS 模板
+  anime-rss:
+    # RSS 输入
+    rss:
+      url: https://mikanani.me/RSS/MyBangumi?token=
+      all_entries: yes
+      
+    # 内容过滤
+    accept_all: yes
+    
+    # 内容限制
+    content_size:
+      min: 100
+      max: 4000
+      strict: no
+
+# 任务配置
+tasks:
+  # Mikan Project 动漫订阅
+  mikan-anime:
+    template:
+      - global-anime
+      - anime-rss
+      
+    # RSS 地址（需要替换为你的实际 RSS 地址）
+    rss: https://mikanani.me/RSS/MyBangumi?token=YOUR_TOKEN_HERE
+    
+    # 只接受动漫内容
+    regexp:
+      accept:
+        - '.*\.(mp4|mkv|avi)$'
+        
+    # 下载到指定目录
+    qbittorrent:
+      path: /downloads/mikan
+    
+    # 自动管理种子
+    free_space:
+      path: /downloads
+      space: 5000  # 保留 5GB 空间
+      
+  # 动漫花园 RSS 订阅
+  dmhy-anime:
+    template:
+      - global-anime
+      
+    # RSS 地址
+    rss: https://share.dmhy.org/topics/rss.xml
+    
+    # 关键词过滤
+    if:
+      - "'動漫' in title": accept
+      - "'动画' in title": accept
+      
+    # 下载到指定目录
+    qbittorrent:
+      path: /downloads/dmhy
+      
+  # 萌番组 RSS 订阅
+  bangumi-moe-anime:
+    template:
+      - global-anime
+      
+    # RSS 地址
+    rss: https://bangumi.moe/rss/latest
+    
+    # 关键词过滤
+    if:
+      - "title ~ '[简日]|\[简体\]|\[CHS\]'": accept
+      
+    # 下载到指定目录
+    qbittorrent:
+      path: /downloads/bangumi-moe
+
+# 调度器设置
+schedules:
+  # 每30分钟检查一次 RSS 更新
+  - tasks: [mikan-anime, dmhy-anime, bangumi-moe-anime]
+    interval:
+      minutes: 30
+      
+# Web 服务器设置
+web_server:
+  bind: 0.0.0.0
+  port: 5050
+  web_ui: yes
+
+# 输入历史记录（避免重复下载）
+history: yes
+
+# 详细日志
+logging:
+  level: info
+  file: /config/flexget.log
