@@ -1,0 +1,134 @@
+version: '3.8'
+
+# =============================================================================
+# 自动化追剧系统 Docker Compose 配置
+# 包含 Radarr, Sonarr, Prowlarr, qBittorrent
+# =============================================================================
+
+networks:
+  media-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.22.0.0/16
+
+services:
+  # =============================================================================
+  # qBittorrent - 下载客户端
+  # =============================================================================
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Shanghai
+      - UMASK=022
+      - WEBUI_PORT=8080
+    volumes:
+      - /opt/nas-data/config/qbittorrent:/config
+      - /opt/nas-data/media/Downloads:/downloads
+      - /opt/nas-data/media/Movies:/movies
+      - /opt/nas-data/media/TV-Shows:/tv
+    ports:
+      - "8080:8080"
+      - "6881:6881"
+      - "6881:6881/udp"
+    networks:
+      media-network:
+        ipv4_address: 172.22.0.10
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # =============================================================================
+  # Prowlarr - 索引器管理中心
+  # =============================================================================
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Shanghai
+      - UMASK=022
+    volumes:
+      - /opt/nas-data/config/prowlarr:/config
+    ports:
+      - "9696:9696"
+    networks:
+      media-network:
+        ipv4_address: 172.22.0.11
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9696"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # =============================================================================
+  # Radarr - 电影管理
+  # =============================================================================
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Shanghai
+      - UMASK=022
+    volumes:
+      - /opt/nas-data/config/radarr:/config
+      - /opt/nas-data/media/Downloads:/downloads
+      - /opt/nas-data/media/Movies:/movies
+    ports:
+      - "7878:7878"
+    networks:
+      media-network:
+        ipv4_address: 172.22.0.12
+    restart: unless-stopped
+    depends_on:
+      - qbittorrent
+      - prowlarr
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7878"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # =============================================================================
+  # Sonarr - 电视剧管理
+  # =============================================================================
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Shanghai
+      - UMASK=022
+    volumes:
+      - /opt/nas-data/config/sonarr:/config
+      - /opt/nas-data/media/Downloads:/downloads
+      - /opt/nas-data/media/TV-Shows:/tv
+    ports:
+      - "8989:8989"
+    networks:
+      media-network:
+        ipv4_address: 172.22.0.13
+    restart: unless-stopped
+    depends_on:
+      - qbittorrent
+      - prowlarr
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8989"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
